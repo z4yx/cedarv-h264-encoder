@@ -9,65 +9,11 @@
 #include "H264encLibApi.h"
 #include "capture.h"
 #include "enc_type.h"
-#include "render.h"
-#include "decode_api.h"
 
-/**********************/
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <sys/types.h>          /* See NOTES */
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#include <strings.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <linux/fs.h>
-#define buffsize 100 
-#define buffsize_frame 4000
 
-#define buf_num  10000
-
-
-
-
-int recv_count=0;
-int dataflag=0;
 int isFirstframe=1;
-unsigned  long ring_count=1;
-unsigned  long get_count=0;
-
-//#include <utils/Log.h>
-
-__u16  info=1;
-__u16 data=0;
-unsigned long long len=0;
-
-
-static struct video_package_datainfo
-{
-	__u16 	package_type;
-	__u32 		video_id;
-	__u32 		video_num;
-	__vbv_data_ctrl_info_t datainfo;
-	
-}video_package_datainfo;
-
-static struct videopackage
-{
-	struct video_package_datainfo video_package_datainfo;
-	__u8 video_data[buffsize_frame];
-	__u8 video_privateData[21];
-	
-}video_package;
-
-#define ring_buffsize sizeof(video_package)
-
-struct ringbuff
-{
-	int flag;
-	char ring_buff[ring_buffsize];
-};
-struct ringbuff r_buff[buf_num];
 
 typedef struct cache_data        //定义缓存数据结构体
 {
@@ -78,35 +24,13 @@ typedef struct cache_data        //定义缓存数据结构体
 	char *data;
 	pthread_mutex_t mut_save_bs;		//互斥锁
 }cache_data;
-#if 1
-//modify @2013-5-17
+
 int mVideoWidth = 640;
 int mVideoHeight = 480;
 int display_time = 30; //ms
-//for socket
-int server_fd ;
-int connect_fd=-1;
-int client_fd=-1;
-#define SERVER_PORT 5555
-#define SERVER_IP "192.168.0.116"
-
- struct sockaddr_in s_addr;
- struct sockaddr_in c_addr;
-socklen_t addr_len=sizeof(c_addr);
-
-//end modify
-#endif
-#if 0
-int mVideoWidth = 1280;
-int mVideoHeight = 720;
-int display_time = 100; //ms
-#endif
-
-
 
 bufMrgQ_t	gBufMrgQ;
 VENC_DEVICE *g_pCedarV = NULL;
-cedarv_decoder_t* hcedarv = NULL;
 
 
 int g_cur_id = -1;
@@ -115,34 +39,16 @@ unsigned long long lastTime = 0 ;
 
 pthread_t thread_camera_id = 0;
 pthread_t thread_enc_id = 0;
-pthread_t thread_dec_id = 0;
 pthread_t thread_save_bs_id = 0;
-pthread_t thread_ring_buff=0;
-//pthread_t thread_client=0;
-
 
 pthread_mutex_t mut_cam_buf;
 pthread_mutex_t mut_ve;
-pthread_mutex_t mut_ring_buff;
-pthread_mutex_t mut_get_buff;
-
  
 cache_data *save_bit_stream = NULL;
-
-
 
 FILE * pEncFile = NULL;
 
 char saveFile[128] = "h264_test.h264";
-//#ifdef __OS_LINUX
-//
-//char saveFile[128] = "/mnt/h264.dat";
-//
-//#else
-//char saveFile[128] = "/mnt/sdcard/h264.dat";
-//#endif
-//
-
 
 static __s32 WaitFinishCB(__s32 uParam1, void *pMsg)
 {
@@ -154,8 +60,6 @@ static __s32 GetFrmBufCB(__s32 uParam1,  void *pFrmBufInfo)
 	int write_id;
 	int read_id;
 	int buf_unused;
-	int ret = -1;
-	V4L2BUF_t Buf;
 	VEnc_FrmBuf_Info encBuf;
 
 	//printf("calling GetFrmBufCB\n"); 
@@ -177,7 +81,7 @@ static __s32 GetFrmBufCB(__s32 uParam1,  void *pFrmBufInfo)
 	encBuf.addrY = gBufMrgQ.omx_bufhead[read_id].buf_info.addrY;
 	encBuf.addrCb = gBufMrgQ.omx_bufhead[read_id].buf_info.addrCb;
 	encBuf.pts_valid = 1;
-	encBuf.pts = (s64)gBufMrgQ.omx_bufhead[read_id].buf_info.pts;
+	encBuf.pts = (long long)gBufMrgQ.omx_bufhead[read_id].buf_info.pts;
 
 	encBuf.color_fmt = PIXEL_YUV420;
 	encBuf.color_space = BT601;
@@ -195,8 +99,6 @@ static __s32 GetFrmBufCB(__s32 uParam1,  void *pFrmBufInfo)
 	return 0;
 }
 
-
-
 cache_data *save_bitstream_int(int size)
 {
 	cache_data *save_bit_stream = (cache_data *)malloc(sizeof(cache_data));
@@ -210,12 +112,11 @@ cache_data *save_bitstream_int(int size)
 	pthread_mutex_init(&save_bit_stream->mut_save_bs,NULL);
 	if(save_bit_stream->data == NULL)
 	{
-		printf("malloc fail\n", saveFile);
+		printf("malloc fail\n");
 		return NULL;
 	}
 	return save_bit_stream;
 }
-
 
 int save_bitstream_exit(cache_data *save_bit_stream)
 {
@@ -235,8 +136,6 @@ int save_bitstream_exit(cache_data *save_bit_stream)
 	
 	return 0;
 }
-
-
 
 int update_bitstream_to_cache(cache_data *save_bit_stream, char *output_data, int data_size)
 {
@@ -382,12 +281,6 @@ int save_left_bitstream(cache_data *save_bit_stream, char * tem_data, int *datas
 	return 0;
 }
 
-
-
-
-
-
-
 VENC_DEVICE * CedarvEncInit(__u32 width, __u32 height, __u32 avg_bit_rate, __s32 (*GetFrmBufCB)(__s32 uParam1,  void *pFrmBufInfo))
 {
 	int ret = -1;
@@ -419,7 +312,7 @@ VENC_DEVICE * CedarvEncInit(__u32 width, __u32 height, __u32 avg_bit_rate, __s32
 	enc_fmt.profileIdc = 66; /* baseline profile */
 	enc_fmt.levelIdc = 31;
 
-	pCedarV->IoCtrl(pCedarV, VENC_SET_ENC_INFO_CMD, &enc_fmt);
+	pCedarV->IoCtrl(pCedarV, VENC_SET_ENC_INFO_CMD, (__u32) &enc_fmt);
 
 	 
 	ret = pCedarV->open(pCedarV);
@@ -499,8 +392,8 @@ void *thread_camera()
 			gBufMrgQ.omx_bufhead[write_id].buf_info.pts = Buf.timeStamp;//时间戳赋值
 			gBufMrgQ.omx_bufhead[write_id].id = Buf.index;//标号 赋值
 
-			gBufMrgQ.omx_bufhead[write_id].buf_info.addrY = Buf.addrPhyY;//???? 不明白的地方
-			gBufMrgQ.omx_bufhead[write_id].buf_info.addrCb = Buf.addrPhyY + mVideoWidth* mVideoHeight;		
+			gBufMrgQ.omx_bufhead[write_id].buf_info.addrY = (__u8 *) Buf.addrPhyY;//???? 不明白的地方
+			gBufMrgQ.omx_bufhead[write_id].buf_info.addrCb = (__u8 *) Buf.addrPhyY + mVideoWidth* mVideoHeight;		
 
 			gBufMrgQ.buf_unused--;//每操作一次自减
 			gBufMrgQ.write_id++;
@@ -561,7 +454,7 @@ void *thread_enc()
 		if(ret == 0)
 		{
 			/* get the motion detection result ,if the result is 1, it means that motion object have been detected*/
-			g_pCedarV->IoCtrl(g_pCedarV, VENC_LIB_CMD_GET_MD_DETECT, &motionflag);
+			g_pCedarV->IoCtrl(g_pCedarV, VENC_LIB_CMD_GET_MD_DETECT, (__u32) &motionflag);
 			//printf("motion detection,result: %d\n", motionflag);
 		}
 
@@ -604,25 +497,9 @@ void *thread_enc()
 					//第二个参数:获取到一帧数据的地址
 					//第三个参数:获取到一帧数据的长度
 					update_bitstream_to_cache(save_bit_stream, data_info.privateData, data_info.privateDataLen);
-					
-
-					/* encode update data to decode */
-				
-					//decode_update_data_from_enc(hcedarv, &data_info, 1);
-					
-				//	DTP(connect_fd,&data_info);
-
 				}
-				else
-				{
-					/* encode update data to decode */
-				
-					//decode_update_data_from_enc(hcedarv, &data_info, 0);
-				}
-
 							
 				/* save bitstream to cache buffer */
-#if 1				
 				if (data_info.uSize0 != 0)
 				{
 					update_bitstream_to_cache(save_bit_stream, data_info.pData0, data_info.uSize0);
@@ -634,7 +511,6 @@ void *thread_enc()
 					update_bitstream_to_cache(save_bit_stream, data_info.pData1, data_info.uSize1);
 
 				}
-#endif				
 								
 				/* encode release bitstream */
 				/*释放bitstream*/
@@ -653,11 +529,10 @@ void *thread_enc()
 
 void *thread_save_bs()
 {
-	int ret;
 	unsigned long long curTime;
 	int data_size = 0;
 	//一Mb大小空间
-	int *tem_data = malloc(1*1024*1024);
+	char *tem_data = malloc(1*1024*1024);
 
 	printf("%s start!\n", __func__);
 	
@@ -679,7 +554,7 @@ void *thread_save_bs()
 			{
 				fwrite(tem_data, data_size, 1, pEncFile);	//将数据写入h264.dat中			
 				
-				printf("success write %ld!!\n",ret);
+				printf("success write %d!!\n",data_size);
 			}
 			
 			//不明白的函数
@@ -689,7 +564,7 @@ void *thread_save_bs()
 			{
 				fwrite(tem_data, data_size, 1, pEncFile);	
 			
-				printf("success write left %ld!!\n",ret);
+				printf("success write left %d!!\n",data_size);
 			}
 
 			if(tem_data)
@@ -720,513 +595,12 @@ void *thread_save_bs()
 	}
 }
 
-int recv_uSize0(__vbv_data_ctrl_info_t *datainfo)
-{
-	int ret;
-	__u32 cpy_offset=0;
-
-	datainfo->pData0=malloc(datainfo->uSize0);
-
-	if(datainfo->uSize0!=0)
-		{	
-			if(datainfo->uSize1!=0)
-				{
-				printf("error data!\n");
-				memset(datainfo,0,sizeof(__vbv_data_ctrl_info_t));
-				return -1;
-				}
-			
-			
-			if(datainfo->uSize0<=buffsize_frame)
-				{
-
-	//			printf("datainfo->uSize0=%d\n",datainfo->uSize0);
-				pthread_mutex_lock(&mut_get_buff);
-				memcpy(datainfo->pData0,video_package.video_data,datainfo->uSize0);
-				pthread_mutex_unlock(&mut_get_buff);
-		//		printf("para==1 read \n");
-				return 1;
-				}
-
-			else
-				{
-					cpy_offset=0;
-				while(datainfo->uSize0-cpy_offset>=buffsize_frame)
-					{		
-			//		printf("para==2 before memcpy\n");
-					pthread_mutex_lock(&mut_get_buff);
-					memcpy(datainfo->pData0+cpy_offset,video_package.video_data,buffsize_frame);	
-					pthread_mutex_unlock(&mut_get_buff);
-					cpy_offset+=buffsize_frame;	
-					
-		//			printf("para==2 read ret =%d\n",cpy_offset);
-										
-					get_video_package();
-			//		printf_package();
-
-					}		
-		//		printf("datainfo->uSize0-cpy_offset=%d\n",datainfo->uSize0-cpy_offset);
-				pthread_mutex_lock(&mut_get_buff);
-				memcpy(datainfo->pData0+cpy_offset,video_package.video_data,datainfo->uSize0-cpy_offset);	
-				pthread_mutex_unlock(&mut_get_buff);
-		//		printf("datainfo->uSize=%d\n",datainfo->uSize0);
-		//		printf("para==3 read ret =%d\n",cpy_offset);
-				return 1;
-				}
-		}
-
-}
-
-void * Ring_buff()
-{
-	int i=0;
-	int ret=-1;	
-	int count=0;
-
-	printf("Ring_buff start\n");
-
-	for(;i<buf_num;i++)
-	{
-	r_buff[i].flag=0;
-	memset(r_buff[i].ring_buff,0,ring_buffsize);
-	}
-
-	
-	while(1)
-	{
-	while(r_buff[count%buf_num].flag==1)
-	{
-		printf("ring_buff is full !r_buff[%d]\n ",count%buf_num);
-		usleep(50000);
-		continue;
-	}
-	
-	ret=recvfrom(server_fd,r_buff[count%buf_num].ring_buff,sizeof(video_package),0,(struct sockaddr*)&c_addr,&addr_len);
-	if(ret>0)
-		{
-		r_buff[count%buf_num].flag=1;		
-		}
-	
-	//printf("Ring_buff get source&recv_count=%d,ring_buff[%d]\n",recv_count,count%buf_num);
-	ring_count++;	
-	count++;
-	
-	
-	
-	if(count>buf_num)
-		{
-			count=0;
-		}
-	}
-	
-}
-
-int get_video_package()
-{
-		memset(&video_package,0,sizeof(video_package));
-		memcpy(&video_package,r_buff[recv_count%buf_num].ring_buff,sizeof(video_package));
-
-		r_buff[recv_count%buf_num].flag=0;
-		get_count++;		
-		recv_count++;
-		len++;
-	//	printf("len=%d\n",len);
-		return 0;
-}
-void printf_package()
-{
-/********printf infomation of package*******/	
-		printf("package type:%d\n",video_package.video_package_datainfo.package_type);
-		printf("package num:%d\n",video_package.video_package_datainfo.video_num);
-		printf("package id:	%d\n",video_package.video_package_datainfo.video_id);
-
-}
-int recv_data_from_package(__vbv_data_ctrl_info_t  *datainfo,int para)
-{
-	int ret=-1;
-	int cpy_offset=0;
-	
-
-
-	
-//	memset(datainfo->pData0,0,datainfo->uSize0);
-//	memset(video_package.video_data,0,buffsize_frame);
-
-
-	while(r_buff[recv_count%buf_num].flag!=1)
-	{
-
-	usleep(50000);
-	continue;
-	}
-	
-		
-	get_video_package();
-		
-	len++;
-
-		if(recv_count>buf_num)
-		{
-		recv_count=0;
-		}
-
-		
-/********printf infomation of package*******/	
-		//printf_package();
-		
-	
-		if(1==isFirstframe)
-		{	
-		
-			isFirstframe=0;
-			
-			
-			if(video_package.video_package_datainfo.package_type==1)
-				{
-					if(video_package.video_package_datainfo.video_num==-1)
-					{
-					memcpy(datainfo,&video_package.video_package_datainfo.datainfo,sizeof(__vbv_data_ctrl_info_t));
-					printf("datainfo.privateDataLen=%d,datainfo.uSize0=%d,datainfo.uSize1=%d\n",datainfo->privateDataLen,datainfo->uSize0,datainfo->uSize1);
-	
-					memcpy(datainfo->privateData,&video_package.video_data,datainfo->privateDataLen);
-			//		printf("datainfo package is OK\n");
-					}
-					
-					
-					get_video_package();
-			//		printf_package();
-					
-		//			printf("flag==1.recv_uSize0\n");
-					ret=recv_uSize0(datainfo);
-		//			printf("ret=%d\n",ret);
-					return ret;
-					
-				}
-			if(video_package.video_package_datainfo.package_type==0)
-				{
-				printf("isFirstframe but get wrong data\n");
-				return -1;
-				}
-
-			else
-				{
-					memset(datainfo,0,sizeof(__vbv_data_ctrl_info_t));
-					memset(&video_package,0,sizeof(video_package));
-					printf("wrong data,isFristframe\n");
-					return -1;
-				}
-
-		}
-
-#if 1
-	if(0==isFirstframe)
-		{
-			if(video_package.video_package_datainfo.package_type==0)
-				{	
-				
-				memcpy(datainfo,&video_package.video_package_datainfo.datainfo,sizeof(__vbv_data_ctrl_info_t));
-		//		printf("datainfo.privateDataLen=%d,datainfo.uSize0=%d,datainfo.uSize1=%d\n",datainfo->privateDataLen,datainfo->uSize0,datainfo->uSize1);
-				ret=recv_uSize0(datainfo);
-		//		printf("recv_uSize0 ret=%d\n",ret);
-				return ret;
-				}
-			else
-				{
-					memset(datainfo,0,sizeof(__vbv_data_ctrl_info_t));
-					memset(&video_package,0,sizeof(video_package));
-					return -1;
-				}
-
-		}
-		
-	else
-		{
-		return -1;
-		}
-#endif
-	
-
-	return -1;
-}
-
-/*get data form socket
-*modify@20130528*/
-int DRP(__vbv_data_ctrl_info_t *datainfo)
-{
-	int ret;
-	
-	
-	
-		
-#if 0	
-	unsigned long long video_time;
-	lastTime = gettimeofday_curr();
-
-	while(client_fd<0){
-	usleep(10*1000);
-	continue;
-	}
-		
-	printf("in DRP\n");
-
-	ret=read(client_fd,&video_time,sizeof(unsigned long long));
-	if(ret<0){
-	printf("read time wrong %d\n",client_fd);
-	exit(-1);
-	}
-	
-	ret=read(client_fd,datainfo,sizeof(__vbv_data_ctrl_info_t));
-	if(ret<0){
-	printf("read datainfo error\n");
-	exit(-1);
-	}
-	
-
-	ret=4096;
-
-	if(ret<datainfo->privateDataLen){
-	do{
-	ret=read(client_fd,datainfo->privateData,ret);
-	if(ret<0){
-	printf("read datainfo.privateData error\n");
-	exit(-1);
-	}}while(ret!=0);	
-	}
-	else{
-	read(client_fd,datainfo->privateData,datainfo->privateDataLen);
-	if(ret<0){
-	printf("read datainfo.privateData error\n");
-	exit(-1);
-	}
-	}
-	
-	ret=4096;
-	if(ret<datainfo->uSize0){
-	do{
-	ret=read(client_fd,datainfo->pData0,ret);
-	printf("success read pData=%d\n",ret);
-	if(ret<0){
-	printf("read datainfo.privateData error\n");
-	exit(-1);
-	}}while(ret!=0);	
-	}
-	else{
-	read(client_fd,datainfo->pData0,datainfo->uSize0);
-	if(ret<0){
-	printf("read datainfo.privateData error\n");
-	exit(-1);
-	}
-	}
-	
-	
-	ret=4096;
-	if(ret<datainfo->uSize1){
-	do{
-	ret=read(client_fd,datainfo->pData1,ret);
-	if(ret<0){
-	printf("read datainfo.privateData error\n");
-	exit(-1);
-	}}while(ret!=0);	
-	}
-	else{
-	read(client_fd,datainfo->pData1,datainfo->uSize1);
-	if(ret<0){
-	printf("read datainfo.privateData error\n");
-	exit(-1);
-	}
-	}
-/***************/
-	ret=read(client_fd,&video_time,sizeof(unsigned long long));
-	if(ret<0){
-	printf("read time wrong! \n");
-	exit(-1);
-	}
-
-	
-	
-	ret=read(client_fd,datainfo,sizeof(__vbv_data_ctrl_info_t));
-	if(ret<0){
-	printf("read datainfo error\n");
-	exit(-1);
-	}
-	printf("success read ret=%d\n",ret);
-
-	ret=read(client_fd,datainfo->privateData,datainfo->privateDataLen);
-	if(ret<0){
-	printf("read datainfo.privateData error\n");
-	exit(-1);
-	}
-
-	ret=read(client_fd,datainfo->pData0,datainfo->uSize0);
-	if(ret<0){
-	printf("read datainfo.pData0 error\n");
-	exit(-1);
-	}
-
-	ret=read(client_fd,datainfo->pData1,datainfo->uSize1);
-	if(ret<0){
-	printf("read datainfo.pData1 error\n");
-	exit(-1);
-	}
-#endif
-	return 0;
-	
-}
-
-
-int DTP(int connect_fd,__vbv_data_ctrl_info_t *datainfo)
-{
-		
-	
-	int ret=-1;
-
-
-
-	
-	lastTime = gettimeofday_curr();
-	ret=write(connect_fd,&lastTime,sizeof(unsigned long long));
-	if(ret<0||ret!=sizeof(unsigned long long)){
-	printf("write time wrong \n");
-	exit(-1);
-	}
-	
-	
-	ret=write(connect_fd,datainfo,sizeof(__vbv_data_ctrl_info_t));
-	if(ret<0||ret!=sizeof(__vbv_data_ctrl_info_t)){
-	printf("write datainfo error\n");
-	exit(-1);
-	}
-	printf("success write datainfo=%d\n",ret);
-
-	ret=write(connect_fd,datainfo->privateData,datainfo->privateDataLen);
-	if(ret<0||ret!=datainfo->privateDataLen){
-	printf("write datainfo.privateData error\n");
-	exit(-1);
-	}
-
-	ret=write(connect_fd,datainfo->pData0,datainfo->uSize0);
-	if(ret<0||ret!=datainfo->uSize0){
-	printf("write datainfo.pData0 error\n");
-	exit(-1);
-	}
-
-	ret=write(connect_fd,datainfo->pData1,datainfo->uSize1);
-	if(ret<0||ret!=datainfo->uSize1){
-	printf("write datainfo.pData1 error\n");
-	exit(-1);
-	}
-
-	return 0;
-
-	
-}
-
-
-void *thread_dec()
-{
-	int ret=-1;
-	unsigned long long curTime;
-	cedarv_picture_t picture;
-	__vbv_data_ctrl_info_t datainfo;
-	
-	
-	int bFirstFrame = 1;
-	
-	
-
-	printf("thread_dec start!\n");
-	
-	//防止解码的数据太旧
-	while(1)
-	{
-		curTime = gettimeofday_curr();
-		
-		if ((curTime - lastTime) > 1000*1000*display_time) 
-		{
-			printf("Exit decode thread\n");			
-			pthread_exit(NULL);
-		}
-
-	
-		/*get data form socket*/
-		if(1==bFirstFrame){
-				bFirstFrame=0;		
-	
-				decode_update_data_from_enc(hcedarv, &datainfo, 1);
-				
-		}
-		else{
-							
-				decode_update_data_from_enc(hcedarv, &datainfo, 0);
-				
-		}
-		
-		//g_pCedarV->ReleaseBitStreamInfo(g_pCedarV, data_info.idx);
-	
-
-		/* decode one frame */	
-		pthread_mutex_lock(&mut_ve);
-
-		ret = decode_one_frame(hcedarv);
-		
-		pthread_mutex_unlock(&mut_ve);
-                                 
-//		printf("decode, ret: %d\n", ret);
-		
-		
-		
-		// fail when try to get an empty frame buffer
-		if (CEDARV_RESULT_NO_FRAME_BUFFER == ret)
-		{
-			usleep(10*1000);
-		}
-		//fail when try to get bitstream frame
-		else if(CEDARV_RESULT_NO_BITSTREAM == ret)
-		{
-			usleep(10*1000);	
-			continue;		
-		}
-
-
-		/* decoder output one frame for display */
-		ret = decode_output_frame(hcedarv, &picture);
-		
-//		printf("ret=%d\n",ret);
-		
-		
-		if(ret == CEDARV_RESULT_OK)
-		{
-			
-			/* display the frame */
-			//显示帧图像
-			render_render(&picture, picture.id);
-	//		printf("render_render is ok!\n");
-			
-			//解码器释放帧
-			/* decoder release the frame */
-			decode_release_frame(hcedarv, picture.id);
-		}
-
-
-	}
-	
-
-}
-
-
-
-
 int main()
 {
 
 
 	
 	int ret = -1;
-
-
-	/*UDP连接*/
-//	server_tcp_init();
-
 	
 	/* init video engine */
 	ret = VE_hardware_Init(0);
@@ -1240,16 +614,7 @@ int main()
 	InitCapture();
 
 	g_pCedarV = CedarvEncInit(mVideoWidth,mVideoHeight,1024*1024, GetFrmBufCB);
-	
-	
-	/* init decoder */
-	hcedarv = decode_init(mVideoWidth, mVideoHeight);
-	
 
-	/* init render */
-	ret = render_init();
-	
-	
 	/* set VE 320M */
 	VE_set_frequence(320);
 
@@ -1265,7 +630,7 @@ int main()
 	save_bit_stream = save_bitstream_int(2*1024*1024);//尺寸大小为2M
 	if (save_bit_stream == NULL)
 	{
-		printf("save_bitstream_int failed\n", save_bit_stream);
+		printf("save_bitstream_int failed\n");
 		goto EXIT;
 	}
 
@@ -1276,19 +641,9 @@ int main()
 
 	pthread_mutex_init(&mut_cam_buf,NULL);
 	pthread_mutex_init(&mut_ve,NULL);
-	pthread_mutex_init(&mut_get_buff,NULL);
-	
 	
 
 	lastTime = gettimeofday_curr();
-#if 0
-	printf("create ring_buf\n");
-	 if(pthread_create(&thread_ring_buff, NULL,Ring_buff, NULL) != 0)
-	{
-		printf("Create Ring_buff fail !\n");
-	}
-
-#endif 	
 
 	/* create camera thread*/
 	if(pthread_create(&thread_camera_id, NULL, thread_camera, NULL) != 0)
@@ -1308,30 +663,11 @@ int main()
 		printf("Create thread_save_bs fail !\n");
 	}
 
-
-
-	/* create decode thread*/               
-   	// if(pthread_create(&thread_dec_id, NULL, thread_dec, NULL) != 0)
-	//{
-	//	printf("Create thread_dec fail !\n");
-	//}
-
-	//while(1)
-	//	{
-	//lastTime = gettimeofday_curr();
-	//}
-
-
 EXIT:
 
 	if(thread_camera_id !=0) 
 	{                 
         pthread_join(thread_camera_id,NULL);
-    }
-
-	if(thread_dec_id !=0) 
-	{                 
-        pthread_join(thread_dec_id,NULL);
     }
 
 	if(thread_enc_id !=0) 
@@ -1352,12 +688,6 @@ EXIT:
 	DeInitCapture();
 
 	CedarvEncExit(g_pCedarV);
-
-	decode_exit(hcedarv);
-
-	render_exit();
-	
-
 
 	if (pEncFile)
 	{

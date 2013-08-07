@@ -4,8 +4,6 @@ STRIP = arm-none-linux-gnueabi-strip
 AR = arm-none-linux-gnueabi-ar
 
 SRCDIRS     =./ \
-			  ./render \
-        ./decode \
         ./include \
         ./capture
 INCLUDES := $(foreach dir,$(SRCDIRS),-I$(dir))

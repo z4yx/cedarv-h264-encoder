@@ -10,17 +10,10 @@
 extern int mVideoWidth;
 extern int mVideoHeight;
 
-int disp_int(int w,int h);
-void disp_start(void);
-void disp_stop(void);
-int disp_set_addr(int w,int h,int *addr);
-void disp_quit();
-
 int InitCapture();
 void DeInitCapture();
 int StartStreaming();
 void ReleaseFrame(int buf_id);
-int WaitCamerReady();
 int GetPreviewFrame(V4L2BUF_t *pBuf);
 
 
